@@ -11,7 +11,9 @@ router.get("/posts", async (req, res) => {
       orderBy: { id: "desc" },
       take: 20,
     });
-    res.json(data);
+    setTimeout(() => {
+      res.json(data);
+    }, 2000); 
   } catch (e) {
     res.status(500).json({ error: e });
   }
