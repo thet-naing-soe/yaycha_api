@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../prismaClient");
+const { auth } = require("../middlewares/auth");
 router.get("/posts", async (req, res) => {
   try {
     const data = await prisma.post.findMany({
@@ -13,7 +14,7 @@ router.get("/posts", async (req, res) => {
     });
     setTimeout(() => {
       res.json(data);
-    }, 2000); 
+    }, 2000);
   } catch (e) {
     res.status(500).json({ error: e });
   }
@@ -37,7 +38,7 @@ router.get("/posts/:id", async (req, res) => {
     res.status(500).json({ error: e });
   }
 });
-router.delete("/posts/:id", async (req, res) => {
+router.delete("/posts/:id", auth, async (req, res) => {
   const { id } = req.params;
   await prisma.comment.deleteMany({
     where: { postId: Number(id) },
@@ -47,7 +48,7 @@ router.delete("/posts/:id", async (req, res) => {
   });
   res.sendStatus(204);
 });
-router.delete("/comments/:id", async (req, res) => {
+router.delete("/comments/:id", auth, async (req, res) => {
   const { id } = req.params;
   await prisma.comment.delete({
     where: { id: Number(id) },
