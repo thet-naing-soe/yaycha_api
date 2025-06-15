@@ -1,6 +1,9 @@
 require("dotenv").config();
 const express = require("express");
 const app = express();
+require("express-ws")(app);
+const { wsRouter } = require("./routers/ws");
+app.use("/", wsRouter);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 const prisma = require("./prismaClient");

@@ -3,6 +3,8 @@ const router = express.Router();
 
 const prisma = require("../prismaClient");
 
+const { clients } = require("./ws");
+
 const { auth, isOwner } = require("../middlewares/auth");
 
 router.get("/posts", async (req, res) => {
@@ -61,27 +63,32 @@ router.get("/following/posts", auth, async (req, res) => {
 });
 
 router.get("/posts/:id", async (req, res) => {
-	const { id } = req.params; 
-	try {
-		const data = await prisma.post.findUnique({
-			where: { id: Number(id) }, 
-			include: {
-				user: true,
-				comments: {
-					include: {
-						user: true,
-						likes: true,
-					},
-				},
-				likes: true,
-			},
-		});
+  const { id } = req.params;
+  try {
+    const data = await prisma.post.findUnique({
+      where: { id: Number(id) },
+      include: {
+        user: true,
+        comments: {
+          include: {
+            user: true,
+            likes: true,
+          },
+        },
+        likes: true,
+      },
+    });
 
-		res.json(data);
-	} catch (e) {
-		console.error("Backend Error in /posts/:id route:", JSON.stringify(e, Object.getOwnPropertyNames(e), 2));
-		res.status(500).json({ error: e.message || "An internal server error occurred for post details" });
-	}
+    res.json(data);
+  } catch (e) {
+    console.error(
+      "Backend Error in /posts/:id route:",
+      JSON.stringify(e, Object.getOwnPropertyNames(e), 2)
+    );
+    res.status(500).json({
+      error: e.message || "An internal server error occurred for post details",
+    });
+  }
 });
 
 router.post("/posts", auth, async (req, res) => {
@@ -127,6 +134,13 @@ router.post("/comments", auth, async (req, res) => {
 
   comment.user = user;
 
+  await addNoti({
+    type: "comment",
+    content: "reply your post",
+    postId,
+    userId: user.id,
+  });
+
   res.json(comment);
 });
 
@@ -155,56 +169,69 @@ router.delete("/comments/:id", auth, isOwner("comment"), async (req, res) => {
 });
 
 router.post("/like/posts/:id", auth, async (req, res) => {
-	const { id } = req.params;
-	const user = res.locals.user;
+  const { id } = req.params;
+  const user = res.locals.user;
 
-    const postId = Number(id);
-    if (isNaN(postId)) {
-        return res.status(400).json({ msg: "Invalid post ID provided" });
-    }
+  const postId = Number(id);
+  if (isNaN(postId)) {
+    return res.status(400).json({ msg: "Invalid post ID provided" });
+  }
 
-    const existingPost = await prisma.post.findUnique({
-        where: { id: postId },
+  const existingPost = await prisma.post.findUnique({
+    where: { id: postId },
+  });
+  if (!existingPost) {
+    return res.status(404).json({ msg: "Post not found" });
+  }
+
+  try {
+    const existingLike = await prisma.postLike.findFirst({
+      where: {
+        postId: postId,
+        userId: Number(user.id),
+      },
     });
-    if (!existingPost) {
-        return res.status(404).json({ msg: "Post not found" });
+
+    if (existingLike) {
+      return res.status(409).json({ msg: "Post already liked by this user" });
     }
 
-    try {
-        const existingLike = await prisma.postLike.findFirst({
-            where: {
-                postId: postId,
-                userId: Number(user.id),
-            },
-        });
+    const like = await prisma.postLike.create({
+      data: {
+        post: {
+          connect: { id: postId },
+        },
+        user: {
+          connect: { id: Number(user.id) },
+        },
+      },
+    });
 
-        if (existingLike) {
-            return res.status(409).json({ msg: "Post already liked by this user" });
-        }
+    await addNoti({
+      type: "like",
+      content: "likes your post",
+      postId: id,
+      userId: user.id,
+    });
 
-        const like = await prisma.postLike.create({
-            data: {
-                post: {
-                    connect: { id: postId },
-                },
-                user: {
-                    connect: { id: Number(user.id) },
-                },
-            },
-        });
+    res.json({ like });
+  } catch (e) {
+    console.error(
+      "Error creating post like:",
+      JSON.stringify(e, Object.getOwnPropertyNames(e), 2)
+    );
 
-        res.json({ like });
-    } catch (e) {
-        console.error("Error creating post like:", JSON.stringify(e, Object.getOwnPropertyNames(e), 2));
-        
-        if (e.code === 'P2002') { 
-            return res.status(409).json({ msg: "Post already liked by this user (duplicate entry)" });
-        }
-        
-        res.status(500).json({ error: e.message || "An internal server error occurred while liking post" });
+    if (e.code === "P2002") {
+      return res
+        .status(409)
+        .json({ msg: "Post already liked by this user (duplicate entry)" });
     }
+
+    res.status(500).json({
+      error: e.message || "An internal server error occurred while liking post",
+    });
+  }
 });
-
 
 router.post("/like/comments/:id", auth, async (req, res) => {
   const { id } = req.params;
@@ -215,6 +242,13 @@ router.post("/like/comments/:id", auth, async (req, res) => {
       commentId: Number(id),
       userId: Number(user.id),
     },
+  });
+
+  await addNoti({
+    type: "like",
+    content: "likes your comment",
+    postId: id,
+    userId: user.id,
   });
 
   res.json({ like });
@@ -287,5 +321,70 @@ router.get("/likes/comments/:id", async (req, res) => {
 
   res.json(data);
 });
+
+router.get("/notis", auth, async (req, res) => {
+  const user = res.locals.user;
+  const notis = await prisma.noti.findMany({
+    where: {
+      post: {
+        userId: Number(user.id),
+      },
+    },
+    include: { user: true },
+    orderBy: { id: "desc" },
+    take: 20,
+  });
+  res.json(notis);
+});
+router.put("/notis/read", auth, async (req, res) => {
+  const user = res.locals.user;
+  await prisma.noti.updateMany({
+    where: {
+      post: {
+        userId: Number(user.id),
+      },
+    },
+    data: { read: true },
+  });
+  res.json({ msg: "Marked all notis read" });
+});
+
+router.put("/notis/read/:id", auth, async (req, res) => {
+  const { id } = req.params;
+  const noti = await prisma.noti.update({
+    where: { id: Number(id) },
+    data: { read: true },
+  });
+  res.json(noti);
+});
+async function addNoti({ type, content, postId, userId }) {
+  const post = await prisma.post.findUnique({
+    where: {
+      id: Number(postId),
+    },
+  });
+  if (!post) {
+    console.warn(
+      `addNoti: Post with ID ${postId} not found. Skipping notification.`
+    );
+    return false;
+  }
+  if (post.userId == userId) return false;
+
+  clients.map((client) => {
+    if (client.userId == post.userId) {
+      client.ws.send(JSON.stringify({ event: "notis" }));
+      console.log(`WS: event sent to ${client.userId}: notis`);
+    }
+  });
+  return await prisma.noti.create({
+    data: {
+      type,
+      content,
+      postId: Number(postId),
+      userId: Number(userId),
+    },
+  });
+}
 
 module.exports = { contentRouter: router };
